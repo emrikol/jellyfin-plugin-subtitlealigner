@@ -1,0 +1,51 @@
+name: Allow only collaborator PRs
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  gatekeep:
+    # Personal repositories accept pull requests only from explicitly allowed collaborators.
+    if: ${{ !contains(fromJson('["OWNER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment and close PR
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const association = context.payload.pull_request.author_association;
+            const pullRequest = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+
+            const message = [
+              'Thanks for your interest! This repository is published as-is under the GPL-3.0 license.',
+              '',
+              '**This is a personal project without support, and Issues are disabled.** Pull requests are accepted only from collaborators explicitly added to this repository.',
+              '',
+              'If you are not a collaborator, please **fork this project** and continue development under the GPL. To avoid confusion, redistributors of modified versions should use a different project name and branding.',
+              '',
+              'Subtitle Aligner depends on version-specific Jellyfin APIs and speech-service behavior. Supporting undocumented servers, platforms, inference services, and media configurations is outside this project’s scope.',
+              '',
+              '---',
+              '',
+              `Your association: **${association}**.`
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullRequest,
+              body: message
+            });
+
+            await github.rest.pulls.update({
+              owner,
+              repo,
+              pull_number: pullRequest,
+              state: 'closed'
+            });

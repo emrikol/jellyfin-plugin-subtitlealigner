@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 508 285.75" role="img" aria-labelledby="title description">
+  <title id="title">Subtitle Aligner</title>
+  <desc id="description">A subtitle panel with timing marks converging on an alignment guide.</desc>
+  <defs>
+    <radialGradient id="background" cx="30%" cy="42%" r="86%">
+      <stop offset="0" stop-color="#343434"/>
+      <stop offset="1" stop-color="#101010"/>
+    </radialGradient>
+  </defs>
+  <rect width="508" height="285.75" fill="url(#background)"/>
+
+  <g fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="92" y="73" width="90" height="140" rx="11" stroke-width="8"/>
+    <path d="M105 108h12m10-14v28m12-22v16m12-27v38m12-31v25m10-13h5" stroke-width="6"/>
+    <path d="M105 154h25m44 0h-25" stroke-width="7"/>
+    <path d="m121 144 10 10-10 10m37-20-10 10 10 10" stroke-width="6"/>
+    <path d="M140 136v36" stroke-width="5"/>
+    <path d="M107 189h60" stroke-width="7"/>
+  </g>
+
+  <g fill="#fff" font-family="Noto Sans, Arial, sans-serif" font-size="52" font-weight="800" letter-spacing="-.8">
+    <text x="204" y="126">Subtitle</text>
+    <text x="204" y="184">Aligner</text>
+  </g>
+</svg>

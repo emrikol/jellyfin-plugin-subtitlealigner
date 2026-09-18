@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Jellyfin.Plugin.SubtitleAligner/Jellyfin.Plugin.SubtitleAligner.csproj" />
+  <Project Path="Jellyfin.Plugin.SubtitleAligner.Tests/Jellyfin.Plugin.SubtitleAligner.Tests.csproj" />
+</Solution>

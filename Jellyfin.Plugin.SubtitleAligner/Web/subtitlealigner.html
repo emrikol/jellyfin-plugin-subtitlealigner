@@ -1,0 +1,436 @@
+<div id="SubtitleAlignerConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-controller="__plugin/subtitlealignerjs">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="SubtitleAlignerConfigForm">
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Subtitle Aligner</h2>
+                    <p class="fieldDescription subtitleValidatorIntro">
+                        Check subtitle timing against spoken audio, then create corrected copies only when the evidence is strong. Set up an inference engine, check one known title, and enable the library scan when you are ready. Original media and subtitle files are never changed.
+                    </p>
+                </div>
+
+                <div class="verticalSection subtitleValidatorRunStatus">
+                    <h3 class="sectionTitle">Current status</h3>
+                    <div role="status" aria-live="polite" aria-atomic="true">
+                        <div id="SubtitleAlignerActivity" class="subtitleValidatorActivity">Loading status…</div>
+                        <div id="SubtitleAlignerMessage" class="fieldDescription"></div>
+                    </div>
+                    <div id="SubtitleAlignerLastRun" class="fieldDescription"></div>
+                    <dl class="subtitleValidatorSummary">
+                        <div><dt>Checked</dt><dd id="SubtitleAlignerTotal">—</dd></div>
+                        <div><dt>In sync</dt><dd id="SubtitleAlignerInSync">—</dd></div>
+                        <div><dt>Corrected copies</dt><dd id="SubtitleAlignerCorrected">—</dd></div>
+                        <div><dt>Needs attention</dt><dd id="SubtitleAlignerAttention">—</dd></div>
+                        <div><dt>Inconclusive</dt><dd id="SubtitleAlignerInconclusive">—</dd></div>
+                    </dl>
+                </div>
+
+                <div class="verticalSection subtitleValidatorSingleTitle">
+                    <h3 class="sectionTitle">Check one title</h3>
+                    <p class="fieldDescription">
+                        Search for a movie or episode with an SRT, WebVTT, ASS, or SSA text subtitle. External sidecars and embedded text tracks are supported. This always rechecks the selected title. A <strong>.subalign</strong> sidecar is created only when corrected copies are enabled and the timing evidence is strong enough.
+                    </p>
+                    <div class="subtitleValidatorSearchRow">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerItemSearch">Title</label>
+                            <input id="SubtitleAlignerItemSearch" is="emby-input" type="search" minlength="2" maxlength="120" autocomplete="off" placeholder="Search movies and episodes" aria-describedby="SubtitleAlignerItemSearchStatus" />
+                        </div>
+                        <button id="SubtitleAlignerItemSearchButton" is="emby-button" type="button" class="raised emby-button"><span>Search</span></button>
+                    </div>
+                    <div id="SubtitleAlignerItemSearchStatus" class="fieldDescription" role="status" aria-live="polite"></div>
+                    <div id="SubtitleAlignerItemResultsWrap" class="selectContainer hide">
+                        <label class="selectLabel" for="SubtitleAlignerItemResults">Matching titles</label>
+                        <select id="SubtitleAlignerItemResults" is="emby-select" size="5">
+                            <option value="">Choose a title</option>
+                        </select>
+                    </div>
+                    <div class="subtitleValidatorActions subtitleValidatorTitleActions">
+                        <button id="SubtitleAlignerSyncItem" is="emby-button" type="button" class="raised button-submit emby-button" disabled><span>Shift entire track</span></button>
+                        <button id="SubtitleAlignerAlignItem" is="emby-button" type="button" class="raised emby-button" disabled><span>Align individual cues</span></button>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription subtitleValidatorRetranscribe">
+                        <label class="emby-checkbox-label">
+                            <input id="SubtitleAlignerRetranscribe" is="emby-checkbox" type="checkbox" disabled />
+                            <span>Retranscribe audio for this run</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Bypasses any cached speech analysis, runs the speech model again, and replaces matching cached sections with the fresh validated response.</div>
+                    </div>
+                    <p id="SubtitleAlignerRunHint" class="fieldDescription" role="status" aria-live="polite">Set up a managed model, custom model, or external Whisper server to enable title checks.</p>
+                    <p class="fieldDescription"><strong>Shift entire track</strong> samples representative windows and moves every cue only when independent speech activity and subtitle-text evidence agree on one consistent offset. <strong>Align individual cues</strong> processes the complete audio, gives each reliably matched cue its own correction, and leaves every unmatched cue unchanged.</p>
+                </div>
+
+                <div class="verticalSection subtitleValidatorLibraries">
+                    <h3 class="sectionTitle">Library coverage</h3>
+                    <p class="fieldDescription">Each library resumes from its saved subtitle results. A library is current only after every discovered subtitle/video pair has a result for the present files, model, and analysis settings.</p>
+                    <div class="subtitleValidatorTableWrap" role="region" aria-label="Subtitle scan progress by library" tabindex="0">
+                        <table class="subtitleValidatorTable subtitleValidatorLibraryTable">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Library</th>
+                                    <th scope="col">Progress</th>
+                                    <th scope="col">State</th>
+                                    <th scope="col">Last completed</th>
+                                </tr>
+                            </thead>
+                            <tbody id="SubtitleAlignerLibraries">
+                                <tr><td colspan="4" class="subtitleValidatorEmpty">Library progress will appear after the first run.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="verticalSection subtitleValidatorModel">
+                    <h3 class="sectionTitle">Inference engine and model</h3>
+                    <div id="SubtitleAlignerModelLive" role="status" aria-live="polite" aria-atomic="true">
+                        <div id="SubtitleAlignerModelStatus" class="subtitleValidatorActivity">Checking model…</div>
+                        <div id="SubtitleAlignerModelMessage" class="fieldDescription"></div>
+                    </div>
+                    <p class="fieldDescription">For local inference, Subtitle Aligner removes models that do not fit the detected engine or available memory, then recommends one from the host's CPU, memory, and usable acceleration. You can choose any compatible model. An external server can be configured under Advanced engine settings. The optional benchmark measures speed only; it never changes your selection or installed model.</p>
+
+                    <div class="selectContainer subtitleValidatorModelPicker">
+                        <label class="selectLabel" for="SubtitleAlignerManagedModel">Managed model</label>
+                        <select id="SubtitleAlignerManagedModel" is="emby-select"></select>
+                        <div id="SubtitleAlignerManagedModelDescription" class="fieldDescription"></div>
+                    </div>
+
+                    <div id="SubtitleAlignerAssessmentLive" class="subtitleValidatorAssessment" role="status" aria-live="polite" aria-atomic="true">
+                        <div id="SubtitleAlignerAssessmentStage" class="subtitleValidatorActivity">Inspecting host…</div>
+                        <div id="SubtitleAlignerAssessmentMessage" class="fieldDescription">Loading host capabilities…</div>
+                        <div id="SubtitleAlignerHost" class="subtitleValidatorHost"></div>
+                        <div id="SubtitleAlignerRecommendation" class="subtitleValidatorRecommendation hide"></div>
+                    </div>
+
+                    <div id="SubtitleAlignerAssessmentResultsWrap" class="subtitleValidatorTableWrap hide" role="region" aria-label="Model benchmark results" tabindex="0">
+                        <table class="subtitleValidatorTable subtitleValidatorAssessmentTable">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Model</th>
+                                    <th scope="col">Load</th>
+                                    <th scope="col">Median transcription</th>
+                                    <th scope="col">Relative speed</th>
+                                </tr>
+                            </thead>
+                            <tbody id="SubtitleAlignerAssessmentResults"></tbody>
+                        </table>
+                    </div>
+                    <div class="subtitleValidatorActions">
+                        <button id="SubtitleAlignerDownloadModel" is="emby-button" type="button" class="raised button-submit emby-button"><span>Install selected model</span></button>
+                        <button id="SubtitleAlignerAssessHost" is="emby-button" type="button" class="raised emby-button"><span>Benchmark selected model</span></button>
+                        <a class="button-link emby-button" is="emby-linkbutton" href="https://huggingface.co/ggerganov/whisper.cpp/blob/5359861c739e955e79d9a303bcbc70fb988958b1/README.md" target="_blank" rel="noopener noreferrer">Model source and license</a>
+                    </div>
+                    <div id="SubtitleAlignerInstallHint" class="fieldDescription subtitleValidatorInstallHint" role="status" aria-live="polite"></div>
+                    <p class="fieldDescription subtitleValidatorAssessmentNote">The optional benchmark transcribes a checksum-verified 11-second public-domain JFK speech sample three times and reports median throughput. If needed, it temporarily downloads the selected model; temporary files are deleted afterward. Benchmarking does not install or select a model. <a href="https://commons.wikimedia.org/wiki/File:JFK_inaugural_address.ogg" target="_blank" rel="noopener noreferrer">Sample provenance and public-domain status</a>.</p>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Automatic library scan</h3>
+                    <p class="fieldDescription">The scheduled task checks external subtitle sidecars, resumes from saved results, and skips unchanged video/subtitle pairs.</p>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="SubtitleAlignerUseWindow" is="emby-checkbox" type="checkbox" />
+                            <span>Run automatic work only during this window</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">The scheduled task checks every 15 minutes and starts work only while the window is open. A title already in progress is allowed to finish.</div>
+                    </div>
+                    <div id="SubtitleAlignerTimeGrid" class="subtitleValidatorTimeGrid" aria-disabled="true">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerStart">Start</label>
+                            <input id="SubtitleAlignerStart" is="emby-input" type="time" step="60" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerEnd">Stop starting new titles at</label>
+                            <input id="SubtitleAlignerEnd" is="emby-input" type="time" step="60" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Corrected copies</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="SubtitleAlignerCreateSidecars" is="emby-checkbox" type="checkbox" />
+                            <span>Create corrected sidecars for high-confidence findings</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            Writes a new <strong>.subalign</strong> subtitle beside the source and asks Jellyfin to refresh the item. The source is never overwritten. A pre-existing file is changed only when its saved hash proves this plugin created it. Turning this off leaves existing corrected copies in place.
+                        </div>
+                    </div>
+                </div>
+
+                <details class="verticalSection subtitleValidatorAdvanced">
+                    <summary>Advanced analysis settings</summary>
+                    <p class="fieldDescription">The defaults are conservative. Changes invalidate saved results so affected subtitles are checked again.</p>
+
+                    <h4>Sampling</h4>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerSamplePositions">Ordered sample positions, percent (default: 10,30,50,70,90,20,40,60,80)</label>
+                        <input id="SubtitleAlignerSamplePositions" is="emby-input" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" />
+                        <div class="fieldDescription">The first positions provide broad coverage; later positions are used only when the initial result is ambiguous.</div>
+                    </div>
+                    <div class="subtitleValidatorNumberGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerInitialSamples">Initial samples (default: 5)</label>
+                            <input id="SubtitleAlignerInitialSamples" is="emby-input" type="number" min="3" max="12" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerSamples">Maximum samples (default: 9)</label>
+                            <input id="SubtitleAlignerSamples" is="emby-input" type="number" min="3" max="12" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerClipDuration">Sample length in seconds (default: 30)</label>
+                            <input id="SubtitleAlignerClipDuration" is="emby-input" type="number" min="10" max="60" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerCueLead">Start before selected cue, seconds (default: 5)</label>
+                            <input id="SubtitleAlignerCueLead" is="emby-input" type="number" min="0" max="15" step="1" />
+                        </div>
+                    </div>
+
+                    <h4>Text-match acceptance</h4>
+                    <div class="subtitleValidatorNumberGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMatchScore">Minimum match score (default: 0.62)</label>
+                            <input id="SubtitleAlignerMatchScore" is="emby-input" type="number" min="0.30" max="0.95" step="0.01" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMatchGap">Minimum runner-up gap (default: 0.08)</label>
+                            <input id="SubtitleAlignerMatchGap" is="emby-input" type="number" min="0.01" max="0.50" step="0.01" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMatchedWords">Minimum matched words (default: 8)</label>
+                            <input id="SubtitleAlignerMatchedWords" is="emby-input" type="number" min="3" max="30" step="1" />
+                        </div>
+                    </div>
+
+                    <h4>Individual-cue matching</h4>
+                    <div class="subtitleValidatorNumberGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerCrossLanguageCueCoverage">Minimum translated cue words matched, percent (default: 35)</label>
+                            <input id="SubtitleAlignerCrossLanguageCueCoverage" is="emby-input" type="number" min="25" max="100" step="1" />
+                            <div class="fieldDescription">Allows paraphrased translations while still requiring at least two distinctive words in order.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMaximumIndividualCueOffset">Largest individual-cue correction, seconds (default: 2.0)</label>
+                            <input id="SubtitleAlignerMaximumIndividualCueOffset" is="emby-input" type="number" min="0.25" max="10" step="0.25" />
+                            <div class="fieldDescription">Prevents a nearby paraphrase from being matched to a distant line. Larger uniform errors belong in Shift entire track.</div>
+                        </div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="SubtitleAlignerEnableFuzzy" is="emby-checkbox" type="checkbox" />
+                            <span>Try close text matching when an exact cue match fails</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Each cue is still accepted or rejected independently. Close matching helps with transcription and translation differences; it never borrows an offset from another cue.</div>
+                    </div>
+                    <div id="SubtitleAlignerFuzzySettings" aria-disabled="true">
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="SubtitleAlignerCrossLanguageFuzzy" is="emby-checkbox" type="checkbox" />
+                                <span>Allow close matches for translated subtitles</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Uses ordered spelling, word-ending, and low-weight phonetic evidence. Timing must still be nearby and supported by speech detection.</div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="SubtitleAlignerFuzzyStemming" is="emby-checkbox" type="checkbox" />
+                                <span>Match common English word endings</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Treats forms such as “walk,” “walked,” and “walking” as closely related.</div>
+                        </div>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="SubtitleAlignerFuzzyPhonetic" is="emby-checkbox" type="checkbox" />
+                                <span>Allow low-weight phonetic matches</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">Helps with names and transcription spelling differences. Phonetic agreement cannot satisfy the phrase threshold by itself.</div>
+                        </div>
+                        <div class="subtitleValidatorNumberGrid">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFuzzySearchRadius">Search radius around each cue, seconds (default: 60)</label>
+                                <input id="SubtitleAlignerFuzzySearchRadius" is="emby-input" type="number" min="15" max="180" step="1" />
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFuzzyMatchScore">Minimum weighted phrase score (default: 0.55)</label>
+                                <input id="SubtitleAlignerFuzzyMatchScore" is="emby-input" type="number" min="0.30" max="0.95" step="0.01" />
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFuzzyDistinctiveTokens">Minimum distinctive tokens (default: 5)</label>
+                                <input id="SubtitleAlignerFuzzyDistinctiveTokens" is="emby-input" type="number" min="3" max="20" step="1" />
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFuzzyTokenSimilarity">Minimum spelling similarity (default: 0.82)</label>
+                                <input id="SubtitleAlignerFuzzyTokenSimilarity" is="emby-input" type="number" min="0.60" max="0.98" step="0.01" />
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFuzzyPhoneticWeight">Phonetic match weight (default: 0.40)</label>
+                                <input id="SubtitleAlignerFuzzyPhoneticWeight" is="emby-input" type="number" min="0.10" max="0.80" step="0.05" />
+                            </div>
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFuzzyMatchGap">Minimum runner-up gap (default: 0.08)</label>
+                                <input id="SubtitleAlignerFuzzyMatchGap" is="emby-input" type="number" min="0.01" max="0.50" step="0.01" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <h4>Timing classifications</h4>
+                    <div class="subtitleValidatorNumberGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerResidual">90% residual tolerance, seconds (default: 0.50)</label>
+                            <input id="SubtitleAlignerResidual" is="emby-input" type="number" min="0.10" max="3" step="0.05" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerInSyncOffset">In-sync offset boundary, seconds (default: 0.35)</label>
+                            <input id="SubtitleAlignerInSyncOffset" is="emby-input" type="number" min="0.05" max="3" step="0.05" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerCueDeadBand">Genuine word-timing no-change band, seconds (default: 0.10)</label>
+                            <input id="SubtitleAlignerCueDeadBand" is="emby-input" type="number" min="0.05" max="1" step="0.05" />
+                            <div class="fieldDescription">For same-language audio with genuine word timing. A directly matched cue inside this band is kept at its authored time.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerCrossLanguageVadDeadBand">Translated segment no-change band, seconds (default: 0.75)</label>
+                            <input id="SubtitleAlignerCrossLanguageVadDeadBand" is="emby-input" type="number" min="0.05" max="1" step="0.05" aria-describedby="SubtitleAlignerCrossLanguageVadDeadBandDescription" />
+                            <div id="SubtitleAlignerCrossLanguageVadDeadBandDescription" class="fieldDescription">For subtitles translated from other-language audio. Source-linked segment onset is less precise than genuine word timing, so offsets inside this wider band are treated as already aligned. VAD must independently confirm speech in the segment.</div>
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerImprovement">Required model improvement, percent (default: 40)</label>
+                            <input id="SubtitleAlignerImprovement" is="emby-input" type="number" min="1" max="90" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerDrift">Minimum drift across title, seconds (default: 0.75)</label>
+                            <input id="SubtitleAlignerDrift" is="emby-input" type="number" min="0.10" max="10" step="0.05" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerBreak">Minimum timing break, seconds (default: 1.00)</label>
+                            <input id="SubtitleAlignerBreak" is="emby-input" type="number" min="0.10" max="20" step="0.05" />
+                        </div>
+                    </div>
+
+                    <h4>Evidence levels</h4>
+                    <div class="subtitleValidatorEvidenceGrid">
+                        <fieldset>
+                            <legend>High confidence defaults</legend>
+                            <div class="subtitleValidatorNumberGrid">
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerHighAnchors">Anchors (5)</label><input id="SubtitleAlignerHighAnchors" is="emby-input" type="number" min="3" max="12" step="1" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerHighWords">Matched words (60)</label><input id="SubtitleAlignerHighWords" is="emby-input" type="number" min="10" max="500" step="1" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerHighCoverage">Coverage percent (60)</label><input id="SubtitleAlignerHighCoverage" is="emby-input" type="number" min="5" max="100" step="1" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerHighScore">Median match score (0.72)</label><input id="SubtitleAlignerHighScore" is="emby-input" type="number" min="0.30" max="0.99" step="0.01" /></div>
+                            </div>
+                        </fieldset>
+                        <fieldset>
+                            <legend>Medium confidence defaults</legend>
+                            <div class="subtitleValidatorNumberGrid">
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMediumAnchors">Anchors (4)</label><input id="SubtitleAlignerMediumAnchors" is="emby-input" type="number" min="3" max="12" step="1" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMediumWords">Matched words (35)</label><input id="SubtitleAlignerMediumWords" is="emby-input" type="number" min="10" max="500" step="1" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMediumCoverage">Coverage percent (40)</label><input id="SubtitleAlignerMediumCoverage" is="emby-input" type="number" min="5" max="100" step="1" /></div>
+                                <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerMediumScore">Median match score (0.62)</label><input id="SubtitleAlignerMediumScore" is="emby-input" type="number" min="0.30" max="0.99" step="0.01" /></div>
+                            </div>
+                        </fieldset>
+                    </div>
+                    <button id="SubtitleAlignerResetAnalysis" is="emby-button" type="button" class="raised emby-button"><span>Reset analysis defaults</span></button>
+                    <span id="SubtitleAlignerResetMessage" class="fieldDescription" role="status" aria-live="polite"></span>
+                </details>
+
+                <details class="verticalSection subtitleValidatorAdvanced">
+                    <summary>Advanced engine settings</summary>
+                    <p class="fieldDescription">Use a trusted external server for faster inference, or leave it blank to run Whisper on the Jellyfin host. Path overrides are intended for custom installations; FFmpeg normally uses Jellyfin's configured executable.</p>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerExternalWhisperUrl">External whisper-server URL (optional)</label>
+                        <input id="SubtitleAlignerExternalWhisperUrl" is="emby-input" type="url" inputmode="url" maxlength="2048" autocomplete="off" spellcheck="false" placeholder="http://computer-name:8080" aria-describedby="SubtitleAlignerExternalWhisperDescription SubtitleAlignerWhisperTestStatus" />
+                        <div id="SubtitleAlignerExternalWhisperDescription" class="fieldDescription">Trusted networks only. Subtitle Aligner sends extracted audio sections to this server. Standard whisper-server does not provide client authentication. Use an absolute HTTP or HTTPS URL without embedded credentials.</div>
+                    </div>
+                    <div class="subtitleValidatorInlineAction">
+                        <button id="SubtitleAlignerTestWhisper" is="emby-button" type="button" class="raised emby-button"><span>Test external server</span></button>
+                        <span id="SubtitleAlignerWhisperTestStatus" class="fieldDescription" role="status" aria-live="polite"></span>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="SubtitleAlignerFallbackWhisper" is="emby-checkbox" type="checkbox" />
+                            <span>Fall back to Whisper on the Jellyfin host</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">If the external server is unavailable or returns a transient overload or backend failure, Subtitle Aligner retries the current audio section once with the selected local model and keeps using it for the remainder of the run. Contract errors and cancelled work are never retried.</div>
+                    </div>
+
+                    <h4>Speech analysis cache</h4>
+                    <p class="fieldDescription">Keep validated, timestamped speech responses on the Jellyfin host so rerunning the same audio does not repeat deterministic model work. The audio itself is not stored.</p>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="SubtitleAlignerEnableCache" is="emby-checkbox" type="checkbox" />
+                            <span>Reuse cached speech analysis</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Each entry is tied to the exact extracted audio, language, timing requirements, selected model, backend, and speech-service build.</div>
+                    </div>
+                    <div id="SubtitleAlignerCacheSettings" class="subtitleValidatorNumberGrid" aria-disabled="false">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerCacheRetention">Remove after this many unused days</label>
+                            <input id="SubtitleAlignerCacheRetention" is="emby-input" type="number" min="1" max="365" step="1" />
+                        </div>
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerCacheMaximum">Maximum cache size, MB</label>
+                            <input id="SubtitleAlignerCacheMaximum" is="emby-input" type="number" min="128" max="16384" step="128" />
+                        </div>
+                    </div>
+                    <div class="subtitleValidatorCacheStatus" role="status" aria-live="polite" aria-atomic="true">
+                        <div>
+                            <div id="SubtitleAlignerCacheSummary" class="subtitleValidatorActivity">Checking cached speech analysis…</div>
+                            <div id="SubtitleAlignerCacheDetails" class="fieldDescription"></div>
+                        </div>
+                        <button id="SubtitleAlignerClearCache" is="emby-button" type="button" class="raised emby-button"><span>Clear cached speech analysis</span></button>
+                    </div>
+                    <div id="SubtitleAlignerCacheActionStatus" class="fieldDescription" role="status" aria-live="polite"></div>
+
+                    <h4>Local engine paths</h4>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerServerPath">whisper-server path</label>
+                        <input id="SubtitleAlignerServerPath" is="emby-input" type="text" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerModelPath">Model path override (default: downloaded recommended model)</label>
+                        <input id="SubtitleAlignerModelPath" is="emby-input" type="text" autocomplete="off" spellcheck="false" />
+                        <div class="fieldDescription">For an offline or custom model, copy it onto the Jellyfin host and enter its full path. Custom models are not checksum-verified by the plugin.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerFfmpegPath">FFmpeg path override</label>
+                        <input id="SubtitleAlignerFfmpegPath" is="emby-input" type="text" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="subtitleValidatorNumberGrid">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="SubtitleAlignerThreads">Whisper CPU threads (default: 0, automatic)</label>
+                            <input id="SubtitleAlignerThreads" is="emby-input" type="number" min="0" max="32" step="1" />
+                        </div>
+                    </div>
+                </details>
+
+                <div class="subtitleValidatorActions">
+                    <button id="SubtitleAlignerSave" is="emby-button" type="submit" class="raised button-submit emby-button">
+                        <span>Save</span>
+                    </button>
+                    <button id="SubtitleAlignerRun" is="emby-button" type="button" class="raised emby-button" disabled>
+                        <span>Save and run library scan</span>
+                    </button>
+                    <span id="SubtitleAlignerSaveStatus" class="fieldDescription subtitleValidatorSaveStatus" role="status" aria-live="polite"></span>
+                </div>
+            </form>
+
+            <div class="verticalSection subtitleValidatorResultsSection">
+                <h3 class="sectionTitle">Recent results</h3>
+                <div class="fieldDescription">The most recently checked subtitle/video pairs. Positive offsets mean the subtitle appears early and needs to move later.</div>
+                <div class="subtitleValidatorTableWrap" role="region" aria-label="Recent subtitle validation results" tabindex="0">
+                    <table class="subtitleValidatorTable">
+                        <thead>
+                            <tr>
+                                <th scope="col">Title</th>
+                                <th scope="col">Subtitle</th>
+                                <th scope="col">Result</th>
+                                <th scope="col">Evidence</th>
+                            </tr>
+                        </thead>
+                        <tbody id="SubtitleAlignerResults">
+                            <tr><td colspan="4" class="subtitleValidatorEmpty">No results yet. Save the settings and run Subtitle Aligner.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

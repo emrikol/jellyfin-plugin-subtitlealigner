@@ -1,0 +1,823 @@
+diff --git a/examples/server/server.cpp b/examples/server/server.cpp
+index b745f4d..ef92b2d 100644
+--- a/examples/server/server.cpp
++++ b/examples/server/server.cpp
+@@ -7,0 +8 @@
++#include <algorithm>
+@@ -17,0 +19 @@
++#include <mutex>
+@@ -21,0 +24 @@
++#include <unordered_map>
+@@ -41,0 +45,159 @@ const std::string vtt_format    = "vtt";
++const std::string contract_schema_version = "1.0";
++const std::string contract_build_identity = "whisper.cpp-v1.9.4-subtitle-aligner-contract-v1";
++const std::string contract_server_version = "whisper.cpp-v1.9.4";
++
++const std::vector<std::string> contract_error_codes = {
++    "unsupported_timing",
++    "word_timestamps_unavailable",
++    "vad_intervals_unavailable",
++    "model_task_mismatch",
++    "invalid_language",
++    "capability_downgrade",
++    "overloaded",
++    "request_cancelled",
++    "request_not_found",
++    "backend_failure",
++    "unsupported_extension_schema_version",
++};
++
++bool contract_schema_is_supported(const std::string & version) {
++    return version == "1" || version.rfind("1.", 0) == 0;
++}
++
++void set_contract_error(
++        Response & res,
++        int status,
++        const std::string & code,
++        const std::string & message,
++        const std::string & request_id = "") {
++    res.status = status;
++    json error = {
++        {"code", code},
++        {"message", message},
++        {"details", json::object()},
++    };
++    if (!request_id.empty()) {
++        error["request_id"] = request_id;
++    }
++    res.set_content(json{{"error", error}}.dump(), "application/json");
++}
++
++std::string contract_form_value(const Request & req, const std::string & name, const std::string & fallback = "") {
++    return req.has_file(name) ? req.get_file_value(name).content : fallback;
++}
++
++std::vector<std::string> requested_timing_granularities(const Request & req) {
++    std::vector<std::string> result;
++    for (const auto & value : req.get_file_values("timestamp_granularities[]")) {
++        if (std::find(result.begin(), result.end(), value.content) == result.end()) {
++            result.push_back(value.content);
++        }
++    }
++    if (result.empty()) {
++        result.push_back("segment");
++    }
++    return result;
++}
++
++double elapsed_seconds(
++        const std::chrono::steady_clock::time_point & start,
++        const std::chrono::steady_clock::time_point & end) {
++    return std::chrono::duration<double>(end - start).count();
++}
++
++struct contract_request_state {
++    std::mutex mutex;
++    std::atomic<bool> cancel_requested{false};
++    std::string request_id;
++    std::string state = "queued";
++    std::string phase = "queued";
++    double processed_audio_seconds = 0.0;
++    double total_audio_seconds = 0.0;
++    double fraction_completed = 0.0;
++    double eta_seconds = 0.0;
++};
++
++json contract_request_json(const std::shared_ptr<contract_request_state> & request) {
++    std::lock_guard<std::mutex> lock(request->mutex);
++    return {
++        {"object", "audio.request"},
++        {"schema_version", contract_schema_version},
++        {"request_id", request->request_id},
++        {"state", request->state},
++        {"phase", request->phase},
++        {"processed_audio_seconds", request->processed_audio_seconds},
++        {"total_audio_seconds", request->total_audio_seconds},
++        {"completed_work", request->processed_audio_seconds},
++        {"total_work", request->total_audio_seconds},
++        {"fraction_completed", request->fraction_completed},
++        {"eta_seconds", request->eta_seconds},
++        {"cancellation_requested", request->cancel_requested.load()},
++    };
++}
++
++void finish_contract_request(
++        const std::shared_ptr<contract_request_state> & request,
++        int response_status) {
++    std::lock_guard<std::mutex> lock(request->mutex);
++    if (request->cancel_requested.load()) {
++        request->state = "cancelled";
++        request->phase = "cancelled";
++    } else if (response_status >= 400) {
++        request->state = "failed";
++        request->phase = "failed";
++    } else {
++        request->state = "completed";
++        request->phase = "completed";
++        request->processed_audio_seconds = request->total_audio_seconds;
++        request->fraction_completed = 1.0;
++        request->eta_seconds = 0.0;
++    }
++}
++
++struct contract_inference_callbacks {
++    const Request * request = nullptr;
++    std::shared_ptr<contract_request_state> state;
++    std::function<bool(const std::string &)> emit;
++    std::chrono::steady_clock::time_point started_at;
++    double total_audio_seconds = 0.0;
++    double pass_start_fraction = 0.0;
++    double pass_fraction = 1.0;
++};
++
++void contract_progress_callback(
++        whisper_context *,
++        whisper_state *,
++        int progress,
++        void * user_data) {
++    auto * callbacks = static_cast<contract_inference_callbacks *>(user_data);
++    const double pass_fraction = std::clamp(progress / 100.0, 0.0, 1.0);
++    const double fraction = callbacks->pass_start_fraction + pass_fraction * callbacks->pass_fraction;
++    const double processed = callbacks->total_audio_seconds * fraction;
++    const double elapsed = elapsed_seconds(callbacks->started_at, std::chrono::steady_clock::now());
++    const double eta = fraction > 0.0 ? std::max(0.0, elapsed / fraction - elapsed) : 0.0;
++    json event = {
++        {"schema_version", contract_schema_version},
++        {"request_id", callbacks->state->request_id},
++        {"phase", "inference"},
++        {"processed_audio_seconds", processed},
++        {"total_audio_seconds", callbacks->total_audio_seconds},
++        {"fraction_completed", fraction},
++        {"eta_seconds", eta},
++    };
++    {
++        std::lock_guard<std::mutex> lock(callbacks->state->mutex);
++        callbacks->state->phase = "inference";
++        callbacks->state->processed_audio_seconds = processed;
++        callbacks->state->fraction_completed = fraction;
++        callbacks->state->eta_seconds = eta;
++    }
++    if (callbacks->emit && !callbacks->emit("event: progress\ndata: " + event.dump() + "\n\n")) {
++        callbacks->state->cancel_requested.store(true);
++    }
++}
++
++bool contract_abort_callback(void * user_data) {
++    auto * callbacks = static_cast<contract_inference_callbacks *>(user_data);
++    return (callbacks->state && callbacks->state->cancel_requested.load())
++        || (callbacks->request && callbacks->request->is_connection_closed());
++}
+@@ -826 +988,143 @@ int main(int argc, char ** argv) {
+-    svr->Post(sparams.request_path + sparams.inference_path, [&](const Request &req, Response &res){
++    const std::string selected_model = std::filesystem::path(params.model).filename().string();
++    const bool model_is_multilingual = whisper_is_multilingual(ctx);
++    const bool vad_available = is_file_exist(params.vad_model.c_str());
++    std::mutex contract_requests_mutex;
++    std::unordered_map<std::string, std::shared_ptr<contract_request_state>> contract_requests;
++
++    svr->Get(sparams.request_path + "/v1/models", [&](const Request &, Response & res) {
++        res.set_content(json{
++            {"object", "list"},
++            {"data", json::array({json{
++                {"id", selected_model},
++                {"object", "model"},
++                {"owned_by", "whisper.cpp"},
++            }})},
++        }.dump(), "application/json");
++    });
++
++    svr->Get(sparams.request_path + "/v1/audio/capabilities", [&](const Request & req, Response & res) {
++        const std::string schema_version = req.get_param_value("schema_version");
++        if (!schema_version.empty() && !contract_schema_is_supported(schema_version)) {
++            set_contract_error(res, 400, "unsupported_extension_schema_version", "Only speech-service extension schema major version 1 is supported.");
++            return;
++        }
++
++        const std::string task = req.get_param_value("task", 0);
++        const std::string requested_task = task.empty() ? "transcribe" : task;
++        if (requested_task != "transcribe" && requested_task != "translate") {
++            set_contract_error(res, 422, "model_task_mismatch", "The requested speech task is not supported.");
++            return;
++        }
++        if (requested_task == "translate" && !model_is_multilingual) {
++            set_contract_error(res, 422, "model_task_mismatch", "The loaded model does not support translation.");
++            return;
++        }
++
++        const std::string language = req.get_param_value("language", 0);
++        if (!language.empty() && language != "auto" && whisper_lang_id(language.c_str()) < 0) {
++            set_contract_error(res, 400, "invalid_language", "The requested language code is not supported.");
++            return;
++        }
++
++        json limitations = json::array();
++        if (!vad_available) {
++            limitations.push_back("vad_intervals_unavailable");
++        }
++        json timing_granularities = json::array({"segment", "word"});
++        json timing_bases = json::array({"decoder_segment", "decoder_word"});
++        if (vad_available) {
++            timing_granularities.push_back("vad");
++            timing_bases.push_back("vad");
++        }
++        json capability = {
++            {"object", "audio.route.capabilities"},
++            {"schema_version", contract_schema_version},
++            {"task", requested_task},
++            {"requested_model", "auto"},
++            {"selected_model", selected_model},
++            {"backend", "whisper.cpp"},
++            {"build_identity", contract_build_identity},
++            {"model_files_cached", true},
++            {"supported_tasks", model_is_multilingual ? json::array({"transcribe", "translate"}) : json::array({"transcribe"})},
++            {"timing_granularities", timing_granularities},
++            {"timing_bases", timing_bases},
++            {"vad_intervals", vad_available},
++            {"supported_languages", model_is_multilingual ? json::array({"*"}) : json::array({"en"})},
++            {"error_codes", contract_error_codes},
++            {"automatic_language_detection", model_is_multilingual},
++            {"effective_language", language.empty() || language == "auto" ? json(nullptr) : json(language)},
++            {"response_formats", json::array({"verbose_json"})},
++            {"confidence_evidence", {
++                {"word_probability", true},
++                {"decoder_token_probabilities", false},
++                {"segment_average_log_probability", true},
++                {"segment_no_speech_probability", true},
++                {"detected_language_probability", true},
++            }},
++            {"optional_features", {
++                {"dual_output", model_is_multilingual},
++                {"dual_output_decode_count", model_is_multilingual ? 2 : 1},
++                {"progress", true},
++                {"cancellation", true},
++            }},
++            {"limits", {
++                {"maximum_upload_bytes", 1073741824},
++                {"maximum_audio_duration_seconds", 21600},
++            }},
++            {"limitations", limitations},
++            {"configuration_can_change", false},
++        };
++        res.set_content(capability.dump(), "application/json");
++    });
++
++    auto request_id_from_path = [](const std::string & path) {
++        const size_t separator = path.find_last_of('/');
++        return separator == std::string::npos ? path : path.substr(separator + 1);
++    };
++    auto find_contract_request = [&](const std::string & request_id) {
++        std::lock_guard<std::mutex> lock(contract_requests_mutex);
++        const auto found = contract_requests.find(request_id);
++        return found == contract_requests.end()
++            ? std::shared_ptr<contract_request_state>()
++            : found->second;
++    };
++    auto cancel_contract_request = [&](const Request & req, Response & res) {
++        const std::string request_id = request_id_from_path(req.path);
++        auto request = find_contract_request(request_id);
++        if (!request) {
++            set_contract_error(res, 404, "request_not_found", "The request ID does not exist.", request_id);
++            return;
++        }
++        {
++            std::lock_guard<std::mutex> lock(request->mutex);
++            if (request->state == "queued" || request->state == "running") {
++                request->state = "cancelled";
++                request->phase = "cancelled";
++                request->cancel_requested.store(true);
++            }
++        }
++        res.set_content(contract_request_json(request).dump(), "application/json");
++    };
++    svr->Get(sparams.request_path + R"(/v1/audio/requests/.*)", [&](const Request & req, Response & res) {
++        const std::string request_id = request_id_from_path(req.path);
++        auto request = find_contract_request(request_id);
++        if (!request) {
++            set_contract_error(res, 404, "request_not_found", "The request ID does not exist.", request_id);
++            return;
++        }
++        res.set_content(contract_request_json(request).dump(), "application/json");
++    });
++    svr->Delete(sparams.request_path + R"(/v1/audio/requests/.*)", [&](const Request & req, Response & res) {
++        cancel_contract_request(req, res);
++    });
++    svr->Post(sparams.request_path + R"(/v1/audio/cancellations/.*)", [&](const Request & req, Response & res) {
++        cancel_contract_request(req, res);
++    });
++
++    auto handle_inference = [&](
++            const Request & req,
++            Response & res,
++            int forced_task,
++            const std::shared_ptr<contract_request_state> & request_state,
++            const std::function<bool(const std::string &)> & emit) {
++        const auto request_received_at = std::chrono::steady_clock::now();
+@@ -828,0 +1133,57 @@ int main(int argc, char ** argv) {
++        const auto preparation_started_at = std::chrono::steady_clock::now();
++
++        const bool contract_request = forced_task >= 0;
++        const std::string request_id = contract_form_value(
++            req,
++            "request_id",
++            "nas-" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
++                request_received_at.time_since_epoch()).count()));
++        const std::string requested_language = contract_form_value(req, "language", "auto");
++        const auto requested_timings = requested_timing_granularities(req);
++        const bool dual_output_requested = contract_request
++            && parse_str_to_bool(contract_form_value(req, "dual_output", "false"));
++
++        if (request_state) {
++            std::lock_guard<std::mutex> state_lock(request_state->mutex);
++            if (request_state->cancel_requested.load()) {
++                set_contract_error(res, 409, "request_cancelled", "The request was cancelled before inference started.", request_id);
++                return;
++            }
++            request_state->state = "running";
++            request_state->phase = "preparing";
++        }
++
++        if (contract_request) {
++            const std::string schema_version = contract_form_value(req, "schema_version", contract_schema_version);
++            if (!contract_schema_is_supported(schema_version)) {
++                set_contract_error(res, 400, "unsupported_extension_schema_version", "Only speech-service extension schema major version 1 is supported.", request_id);
++                return;
++            }
++            const std::string requested_model = contract_form_value(req, "model", "auto");
++            if (requested_model != "auto" && requested_model != selected_model) {
++                set_contract_error(res, 422, "model_task_mismatch", "The requested model is not loaded by this service.", request_id);
++                return;
++            }
++            if (forced_task == 1 && !model_is_multilingual) {
++                set_contract_error(res, 422, "model_task_mismatch", "The loaded model does not support translation.", request_id);
++                return;
++            }
++            if (requested_language != "auto" && whisper_lang_id(requested_language.c_str()) < 0) {
++                set_contract_error(res, 400, "invalid_language", "The requested language code is not supported.", request_id);
++                return;
++            }
++            for (const auto & timing : requested_timings) {
++                if (timing == "vad" && !vad_available) {
++                    set_contract_error(res, 422, "vad_intervals_unavailable", "The NAS-local service does not have a VAD model configured.", request_id);
++                    return;
++                }
++                if (timing != "segment" && timing != "word" && timing != "vad") {
++                    set_contract_error(res, 422, "unsupported_timing", "The requested timing granularity is not supported.", request_id);
++                    return;
++                }
++            }
++            if (dual_output_requested && forced_task != 1) {
++                set_contract_error(res, 422, "capability_downgrade", "Dual output is available only for translation requests.", request_id);
++                return;
++            }
++        }
+@@ -834,3 +1195,7 @@ int main(int argc, char ** argv) {
+-            const std::string error_resp = "{\"error\":\"no 'file' field in the request\"}";
+-            res.status = 400;
+-            res.set_content(error_resp, "application/json");
++            if (contract_request) {
++                set_contract_error(res, 400, "backend_failure", "No audio file was supplied.", request_id);
++            } else {
++                const std::string error_resp = "{\"error\":\"no 'file' field in the request\"}";
++                res.status = 400;
++                res.set_content(error_resp, "application/json");
++            }
+@@ -842,0 +1208,16 @@ int main(int argc, char ** argv) {
++        if (contract_request) {
++            params.translate = forced_task == 1;
++            params.language = requested_language;
++            params.response_format = contract_form_value(req, "response_format", vjson_format);
++            const bool wants_word_timing = std::find(
++                requested_timings.begin(), requested_timings.end(), "word") != requested_timings.end();
++            const bool wants_vad_timing = std::find(
++                requested_timings.begin(), requested_timings.end(), "vad") != requested_timings.end();
++            params.token_timestamps = wants_word_timing;
++            params.split_on_word = wants_word_timing;
++            params.vad = wants_vad_timing;
++            if (params.response_format != vjson_format) {
++                set_contract_error(res, 400, "capability_downgrade", "Only verbose_json is available on the contract route.", request_id);
++                return;
++            }
++        }
+@@ -862,2 +1243,6 @@ int main(int argc, char ** argv) {
+-                res.status = 500;
+-                res.set_content(error_resp, "application/json");
++                if (contract_request) {
++                    set_contract_error(res, 500, "backend_failure", "The audio converter failed.", request_id);
++                } else {
++                    res.status = 500;
++                    res.set_content(error_resp, "application/json");
++                }
+@@ -871,3 +1256,7 @@ int main(int argc, char ** argv) {
+-                const std::string error_resp = "{\"error\":\"failed to read WAV file\"}";
+-                res.status = 400;
+-                res.set_content(error_resp, "application/json");
++                if (contract_request) {
++                    set_contract_error(res, 400, "backend_failure", "The supplied audio could not be decoded.", request_id);
++                } else {
++                    const std::string error_resp = "{\"error\":\"failed to read WAV file\"}";
++                    res.status = 400;
++                    res.set_content(error_resp, "application/json");
++                }
+@@ -882,3 +1271,7 @@ int main(int argc, char ** argv) {
+-                const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
+-                res.status = 400;
+-                res.set_content(error_resp, "application/json");
++                if (contract_request) {
++                    set_contract_error(res, 400, "backend_failure", "The supplied audio could not be decoded.", request_id);
++                } else {
++                    const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
++                    res.status = 400;
++                    res.set_content(error_resp, "application/json");
++                }
+@@ -889,0 +1283,14 @@ int main(int argc, char ** argv) {
++        contract_inference_callbacks callbacks;
++        if (request_state) {
++            callbacks.request = &req;
++            callbacks.state = request_state;
++            callbacks.emit = emit;
++            callbacks.started_at = std::chrono::steady_clock::now();
++            callbacks.total_audio_seconds = double(pcmf32.size()) / WHISPER_SAMPLE_RATE;
++            {
++                std::lock_guard<std::mutex> state_lock(request_state->mutex);
++                request_state->total_audio_seconds = callbacks.total_audio_seconds;
++                request_state->phase = "inference";
++            }
++            contract_progress_callback(ctx, nullptr, 0, &callbacks);
++        }
+@@ -921,0 +1329,4 @@ int main(int argc, char ** argv) {
++        std::chrono::steady_clock::time_point inference_started_at;
++        std::chrono::steady_clock::time_point inference_finished_at;
++        json source_segments = json::array();
++
+@@ -986 +1397,5 @@ int main(int argc, char ** argv) {
+-            if (wparams.print_progress) {
++            if (request_state) {
++                wparams.print_progress = false;
++                wparams.progress_callback = contract_progress_callback;
++                wparams.progress_callback_user_data = &callbacks;
++            } else if (wparams.print_progress) {
+@@ -992,6 +1407,11 @@ int main(int argc, char ** argv) {
+-            wparams.abort_callback = [](void *user_data) {
+-                // user_data is a pointer to our Request
+-                auto req_ptr = static_cast<const httplib::Request*>(user_data);
+-                return req_ptr->is_connection_closed();
+-            };
+-            wparams.abort_callback_user_data = (void*)&req;
++            if (request_state) {
++                wparams.abort_callback = contract_abort_callback;
++                wparams.abort_callback_user_data = &callbacks;
++            } else {
++                wparams.abort_callback = [](void *user_data) {
++                    // user_data is a pointer to our Request
++                    auto req_ptr = static_cast<const httplib::Request*>(user_data);
++                    return req_ptr->is_connection_closed();
++                };
++                wparams.abort_callback_user_data = (void*)&req;
++            }
+@@ -999 +1419,28 @@ int main(int argc, char ** argv) {
+-            if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
++            inference_started_at = std::chrono::steady_clock::now();
++            int inference_result = 0;
++            if (dual_output_requested) {
++                callbacks.pass_start_fraction = 0.0;
++                callbacks.pass_fraction = 0.5;
++                wparams.translate = false;
++                inference_result = whisper_full_parallel(
++                    ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors);
++                if (inference_result == 0) {
++                    const int n_source_segments = whisper_full_n_segments(ctx);
++                    for (int i = 0; i < n_source_segments; ++i) {
++                        source_segments.push_back({
++                            {"segment_id", "segment-" + std::to_string(i)},
++                            {"start", whisper_full_get_segment_t0(ctx, i) * 0.01},
++                            {"end", whisper_full_get_segment_t1(ctx, i) * 0.01},
++                            {"text", whisper_full_get_segment_text(ctx, i)},
++                        });
++                    }
++                }
++            }
++            if (inference_result == 0) {
++                callbacks.pass_start_fraction = dual_output_requested ? 0.5 : 0.0;
++                callbacks.pass_fraction = dual_output_requested ? 0.5 : 1.0;
++                wparams.translate = params.translate;
++                inference_result = whisper_full_parallel(
++                    ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors);
++            }
++            if (inference_result != 0) {
+@@ -1000,0 +1448,5 @@ int main(int argc, char ** argv) {
++                if (request_state && request_state->cancel_requested.load()) {
++                    fprintf(stderr, "request cancelled, aborted processing\n");
++                    set_contract_error(res, 409, "request_cancelled", "The request was cancelled before inference completed.", request_id);
++                    return;
++                }
+@@ -1004,2 +1456,6 @@ int main(int argc, char ** argv) {
+-                    res.status = 499; // Client Closed Request (nginx convention)
+-                    res.set_content("{\"error\":\"client disconnected\"}", "application/json");
++                    if (contract_request) {
++                        set_contract_error(res, 499, "request_cancelled", "The client disconnected before inference completed.", request_id);
++                    } else {
++                        res.status = 499; // Client Closed Request (nginx convention)
++                        res.set_content("{\"error\":\"client disconnected\"}", "application/json");
++                    }
+@@ -1009,3 +1465,7 @@ int main(int argc, char ** argv) {
+-                res.status = 500; // Internal Server Error
+-                const std::string error_resp = "{\"error\":\"failed to process audio\"}";
+-                res.set_content(error_resp, "application/json");
++                if (contract_request) {
++                    set_contract_error(res, 500, "backend_failure", "The speech backend failed to process the audio.", request_id);
++                } else {
++                    res.status = 500; // Internal Server Error
++                    const std::string error_resp = "{\"error\":\"failed to process audio\"}";
++                    res.set_content(error_resp, "application/json");
++                }
+@@ -1013,0 +1474,6 @@ int main(int argc, char ** argv) {
++            inference_finished_at = std::chrono::steady_clock::now();
++            if (request_state) {
++                callbacks.pass_start_fraction = 0.0;
++                callbacks.pass_fraction = 1.0;
++                contract_progress_callback(ctx, nullptr, 100, &callbacks);
++            }
+@@ -1074,0 +1541,2 @@ int main(int argc, char ** argv) {
++            std::string detected_language;
++            double detected_language_probability = -1.0;
+@@ -1079,2 +1546,0 @@ int main(int argc, char ** argv) {
+-                jres["detected_language"] = whisper_lang_str_full(detected_lang_id);
+-                jres["detected_language_probability"] = lang_probs[detected_lang_id];
+@@ -1082,4 +1548,10 @@ int main(int argc, char ** argv) {
+-                // Add all language probabilities
+-                for (int i = 0; i <= whisper_lang_max_id(); ++i) {
+-                    if (lang_probs[i] > 0.001f) { // Only include non-negligible probabilities
+-                        jres["language_probabilities"][whisper_lang_str(i)] = lang_probs[i];
++                if (detected_lang_id >= 0) {
++                    detected_language = whisper_lang_str(detected_lang_id);
++                    detected_language_probability = lang_probs[detected_lang_id];
++                    jres["detected_language"] = whisper_lang_str_full(detected_lang_id);
++                    jres["detected_language_probability"] = detected_language_probability;
++                    // Add all language probabilities
++                    for (int i = 0; i <= whisper_lang_max_id(); ++i) {
++                        if (lang_probs[i] > 0.001f) { // Only include non-negligible probabilities
++                            jres["language_probabilities"][whisper_lang_str(i)] = lang_probs[i];
++                        }
+@@ -1157,0 +1630,118 @@ int main(int argc, char ** argv) {
++            if (contract_request) {
++                const double audio_duration_seconds = double(pcmf32.size()) / WHISPER_SAMPLE_RATE;
++                const double queue_seconds = elapsed_seconds(request_received_at, preparation_started_at);
++                const double preparation_seconds = elapsed_seconds(preparation_started_at, inference_started_at);
++                const double inference_seconds = elapsed_seconds(inference_started_at, inference_finished_at);
++                const bool has_word_timing = std::find(
++                    requested_timings.begin(), requested_timings.end(), "word") != requested_timings.end();
++                json channels = json::object();
++                for (const auto & timing : requested_timings) {
++                    const bool word = timing == "word";
++                    const bool vad = timing == "vad";
++                    const bool reliable = vad || !(params.translate && word);
++                    channels[timing] = {
++                        {"basis", vad ? "vad" : word ? "decoder_word" : "decoder_segment"},
++                        {"reliable", reliable},
++                        {"reliability", vad
++                            ? "silero-vad"
++                            : reliable ? "decoder-provided" : "translation-word-timing-approximate"},
++                    };
++                }
++                json warnings = json::array();
++                if (params.translate && has_word_timing) {
++                    warnings.push_back("translated_word_timestamps_approximate");
++                }
++                if (detected_language.empty() || detected_language_probability < 0) {
++                    warnings.push_back("language_confidence_unavailable");
++                }
++                const std::string effective_language = requested_language != "auto"
++                    ? requested_language
++                    : detected_language;
++                json extension = {
++                    {"schema_version", contract_schema_version},
++                    {"request_id", request_id},
++                    {"task", params.translate ? "translate" : "transcribe"},
++                    {"requested_model", contract_form_value(req, "model", "auto")},
++                    {"selected_model", selected_model},
++                    {"backend", "whisper.cpp"},
++                    {"server_version", contract_server_version},
++                    {"build_identity", contract_build_identity},
++                    {"requested_language", requested_language},
++                    {"detected_language", detected_language.empty() ? json(nullptr) : json(detected_language)},
++                    {"effective_language", effective_language.empty() ? json(nullptr) : json(effective_language)},
++                    {"timing", {
++                        {"requested", requested_timings},
++                        {"actual", requested_timings},
++                        {"basis", has_word_timing ? "decoder_word" : "decoder_segment"},
++                        {"reliable", !(params.translate && has_word_timing)},
++                        {"reliability", params.translate && has_word_timing
++                            ? "translation-word-timing-approximate"
++                            : "decoder-provided"},
++                        {"channels", channels},
++                    }},
++                    {"audio_duration_seconds", audio_duration_seconds},
++                    {"queue_seconds", queue_seconds},
++                    {"preparation_seconds", preparation_seconds},
++                    {"inference_seconds", inference_seconds},
++                    {"cold_start_seconds", 0.0},
++                    {"inference_includes_preparation", false},
++                    {"realtime_factor", audio_duration_seconds > 0 ? inference_seconds / audio_duration_seconds : 0.0},
++                    {"cache", {{"type", "model_files"}, {"hit", true}}},
++                    {"decode_count", dual_output_requested ? 2 : 1},
++                    {"warnings", warnings},
++                };
++                if (detected_language_probability >= 0) {
++                    extension["detected_language_probability"] = detected_language_probability;
++                    extension["detected_language_probability_basis"] = "whisper_language_classifier";
++                }
++                jres["x_whisper_server"] = extension;
++                jres["speech_segments"] = json::array();
++                if (params.vad) {
++                    const int n_vad_segments = whisper_full_n_vad_segments(ctx);
++                    for (int i = 0; i < n_vad_segments; ++i) {
++                        jres["speech_segments"].push_back({
++                            {"start", whisper_full_get_vad_segment_t0(ctx, i) * 0.01},
++                            {"end", whisper_full_get_vad_segment_t1(ctx, i) * 0.01},
++                        });
++                    }
++                }
++                if (dual_output_requested) {
++                    jres["source_segments"] = source_segments;
++                    jres["translation_segments"] = json::array();
++                    const int n_translation_segments = whisper_full_n_segments(ctx);
++                    std::vector<std::string> translated_by_source(source_segments.size());
++                    for (int j = 0; j < n_translation_segments; ++j) {
++                        const double translated_start = whisper_full_get_segment_t0(ctx, j) * 0.01;
++                        const double translated_end = whisper_full_get_segment_t1(ctx, j) * 0.01;
++                        size_t best_source = source_segments.size();
++                        double best_overlap = 0.0;
++                        double best_midpoint_distance = DBL_MAX;
++                        for (size_t i = 0; i < source_segments.size(); ++i) {
++                            const double source_start = source_segments[i]["start"].get<double>();
++                            const double source_end = source_segments[i]["end"].get<double>();
++                            const double overlap = std::max(
++                                0.0,
++                                std::min(source_end, translated_end) - std::max(source_start, translated_start));
++                            const double midpoint_distance = std::abs(
++                                (source_start + source_end) / 2.0 - (translated_start + translated_end) / 2.0);
++                            if (overlap > best_overlap
++                                || (overlap == best_overlap && overlap > 0.0 && midpoint_distance < best_midpoint_distance)) {
++                                best_source = i;
++                                best_overlap = overlap;
++                                best_midpoint_distance = midpoint_distance;
++                            }
++                        }
++                        if (best_source < translated_by_source.size()) {
++                            translated_by_source[best_source] += whisper_full_get_segment_text(ctx, j);
++                        }
++                    }
++                    for (size_t i = 0; i < source_segments.size(); ++i) {
++                        jres["translation_segments"].push_back({
++                            {"segment_id", source_segments[i]["segment_id"]},
++                            {"start", source_segments[i]["start"]},
++                            {"end", source_segments[i]["end"]},
++                            {"text", translated_by_source[i]},
++                        });
++                    }
++                }
++            }
+@@ -1173,0 +1764,99 @@ int main(int argc, char ** argv) {
++    };
++    svr->Post(sparams.request_path + sparams.inference_path, [&](const Request & req, Response & res) {
++        handle_inference(req, res, -1, nullptr, {});
++    });
++    auto handle_contract_route = [&](
++            const Request & req,
++            Response & res,
++            int forced_task) {
++        auto request_copy = std::make_shared<Request>(req);
++        const bool stream = parse_str_to_bool(contract_form_value(*request_copy, "stream", "false"));
++        std::string request_id = contract_form_value(*request_copy, "request_id");
++        if (request_id.empty()) {
++            request_id = "nas-" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
++                std::chrono::steady_clock::now().time_since_epoch()).count());
++            request_copy->files.emplace(
++                "request_id",
++                MultipartFormData{"request_id", request_id, "", ""});
++        }
++
++        auto request_state = std::make_shared<contract_request_state>();
++        request_state->request_id = request_id;
++        {
++            std::lock_guard<std::mutex> lock(contract_requests_mutex);
++            if (contract_requests.find(request_id) != contract_requests.end()) {
++                set_contract_error(res, 409, "overloaded", "The request ID is already active.", request_id);
++                return;
++            }
++            if (contract_requests.size() >= 256) {
++                for (auto it = contract_requests.begin(); it != contract_requests.end();) {
++                    std::lock_guard<std::mutex> state_lock(it->second->mutex);
++                    if (it->second->state == "completed"
++                            || it->second->state == "cancelled"
++                            || it->second->state == "failed") {
++                        it = contract_requests.erase(it);
++                    } else {
++                        ++it;
++                    }
++                }
++            }
++            if (contract_requests.size() >= 256) {
++                set_contract_error(res, 503, "overloaded", "The speech-service request registry is full.", request_id);
++                return;
++            }
++            contract_requests.emplace(request_id, request_state);
++        }
++
++        if (!stream) {
++            handle_inference(*request_copy, res, forced_task, request_state, {});
++            finish_contract_request(request_state, res.status);
++            return;
++        }
++
++        auto served = std::make_shared<std::atomic<bool>>(false);
++        res.set_header("Cache-Control", "no-cache");
++        res.set_chunked_content_provider(
++            "text/event-stream",
++            [&, request_copy, request_state, served, forced_task](size_t, DataSink & sink) {
++                if (served->exchange(true)) {
++                    return false;
++                }
++                Response inference_response;
++                auto emit = [&](const std::string & event) {
++                    return sink.is_writable() && sink.write(event.data(), event.size());
++                };
++                handle_inference(
++                    *request_copy,
++                    inference_response,
++                    forced_task,
++                    request_state,
++                    emit);
++
++                finish_contract_request(request_state, inference_response.status);
++                const std::string terminal_event = inference_response.status >= 400
++                    ? "event: error\ndata: " + inference_response.body + "\n\n"
++                    : "event: result\ndata: " + inference_response.body + "\n\n";
++                emit(terminal_event);
++                sink.done();
++                return false;
++            },
++            [request_state](bool success) {
++                if (!success) {
++                    request_state->cancel_requested.store(true);
++                    std::lock_guard<std::mutex> state_lock(request_state->mutex);
++                    if (request_state->state == "queued" || request_state->state == "running") {
++                        request_state->state = "cancelled";
++                        request_state->phase = "cancelled";
++                    }
++                }
++            });
++    };
++    svr->Post(sparams.request_path + "/v1/audio/transcriptions", [&](const Request & req, Response & res) {
++        handle_contract_route(req, res, 0);
++    });
++    svr->Post(sparams.request_path + "/v1/audio/translations", [&](const Request & req, Response & res) {
++        handle_contract_route(req, res, 1);
++    });
++    svr->Options(sparams.request_path + "/v1/audio/transcriptions", [&](const Request &, Response &){
++    });
++    svr->Options(sparams.request_path + "/v1/audio/translations", [&](const Request &, Response &){
+@@ -1244 +1933,3 @@ int main(int argc, char ** argv) {
+-        if (res.status == 400) {
++        if (req.path.rfind("/v1/", 0) == 0 && !res.body.empty()) {
++            return;
++        } else if (res.status == 400) {
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index 66130cf..1b193b8 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -6757 +6756,0 @@ static bool whisper_vad(
+-        struct whisper_context * ctx,
+@@ -6766 +6765,3 @@ static bool whisper_vad(
+-    // Clear any existing mapping table
++    // VAD results belong to exactly one inference. Clear both the derived
++    // mapping and the public segment list before processing this request so a
++    // no-speech result cannot expose intervals retained from an earlier call.
+@@ -6767,0 +6769 @@ static bool whisper_vad(
++    state->vad_segments.clear();
+@@ -6791,2 +6793 @@ static bool whisper_vad(
+-        ctx->state->vad_segments.clear();
+-        ctx->state->vad_segments.reserve(vad_segments->data.size());
++        state->vad_segments.reserve(vad_segments->data.size());
+@@ -6865 +6866 @@ static bool whisper_vad(
+-                ctx->state->vad_segments.push_back(segment);
++                state->vad_segments.push_back(segment);
+@@ -7900 +7901 @@ int whisper_full(
+-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
++        if (!whisper_vad(ctx->state, params, samples, n_samples, vad_samples)) {
+@@ -7928 +7929 @@ int whisper_full_parallel(
+-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
++        if (!whisper_vad(ctx->state, params, samples, n_samples, vad_samples)) {
+diff --git a/tests/test-vad-full.cpp b/tests/test-vad-full.cpp
+index f033e05..0d544d5 100644
+--- a/tests/test-vad-full.cpp
++++ b/tests/test-vad-full.cpp
+@@ -83,0 +84,7 @@ int main() {
++    // VAD intervals are request-scoped. A no-speech inference on the same
++    // context must not expose the preceding sample's speech intervals.
++    const std::vector<float> silence(WHISPER_SAMPLE_RATE, 0.0f);
++    assert(whisper_full_parallel(wctx, wparams, silence.data(), silence.size(), 1) == 0);
++    assert(whisper_full_n_segments(wctx) == 0);
++    assert(whisper_full_n_vad_segments(wctx) == 0);
++

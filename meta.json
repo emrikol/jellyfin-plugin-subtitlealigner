@@ -1,0 +1,15 @@
+{
+  "category": "Subtitles",
+  "changelog": "Reuses validated speech responses for deterministic reruns, with daily retention and LRU cleanup plus administrator cache controls.",
+  "description": "Checks text subtitles against spoken audio, explains timing problems, and writes conservative corrected sidecars without changing source files.",
+  "guid": "8f7de91f-ddab-4402-9c9d-f15a36fa119e",
+  "imagePath": "logo.png",
+  "name": "Subtitle Aligner",
+  "overview": "Checks and safely corrects subtitle timing with Whisper.",
+  "owner": "Subtitle Aligner contributors",
+  "targetAbi": "12.0.0.0",
+  "version": "0.4.0.11",
+  "status": "Active",
+  "autoUpdate": false,
+  "assemblies": []
+}

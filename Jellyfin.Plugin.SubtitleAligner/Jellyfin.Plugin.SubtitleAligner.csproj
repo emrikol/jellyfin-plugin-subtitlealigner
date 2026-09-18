@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.SubtitleAligner</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Description>Checks and safely corrects subtitle timing with Whisper.</Description>
+    <Authors>Subtitle Aligner contributors</Authors>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="12.0.0">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Web\subtitlealigner.html" />
+    <None Remove="Web\subtitlealigner.js" />
+    <None Remove="Web\subtitlealigner-client.js" />
+    <EmbeddedResource Include="Web\subtitlealigner.html" />
+    <EmbeddedResource Include="Web\subtitlealigner.js" />
+    <EmbeddedResource Include="Web\subtitlealigner-client.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Jellyfin.Plugin.SubtitleAligner.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

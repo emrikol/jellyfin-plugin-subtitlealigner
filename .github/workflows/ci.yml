@@ -1,0 +1,48 @@
+name: Build and validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Jellyfin.Plugin.SubtitleAligner.slnx
+
+      - name: Verify formatting
+        run: dotnet format Jellyfin.Plugin.SubtitleAligner.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build Jellyfin.Plugin.SubtitleAligner.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Jellyfin.Plugin.SubtitleAligner.slnx --configuration Release --no-build
+
+      - name: Check dashboard JavaScript
+        run: |
+          node --input-type=module --check < Jellyfin.Plugin.SubtitleAligner/Web/subtitlealigner.js
+          node --input-type=module --check < Jellyfin.Plugin.SubtitleAligner/Web/subtitlealigner-client.js
+
+      - name: Check speech contract tooling
+        run: |
+          bash -n tools/check-speech-service-contract.sh
+          bash -n tools/test-speech-service-contract.sh
+          python3 -m py_compile tools/synthetic-speech-service.py
+          bash tools/test-speech-service-contract.sh
