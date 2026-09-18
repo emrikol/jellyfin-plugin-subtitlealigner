@@ -6,8 +6,9 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     ignore:
-      # Jellyfin.Controller must stay aligned with build.yaml targetAbi.
+      # Jellyfin packages must stay aligned with build.yaml targetAbi.
       - dependency-name: Jellyfin.Controller
+      - dependency-name: Jellyfin.Model
 
   - package-ecosystem: github-actions
     directory: /
