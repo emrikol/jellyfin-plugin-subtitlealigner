@@ -11,7 +11,7 @@ permissions:
 jobs:
   gatekeep:
     # Personal repositories accept pull requests only from explicitly allowed collaborators.
-    if: ${{ !contains(fromJson('["OWNER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.actor != 'dependabot[bot]' }}
+    if: ${{ !contains(fromJson('["OWNER","COLLABORATOR"]'), github.event.pull_request.author_association) && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Comment and close PR
